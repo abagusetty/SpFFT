@@ -1,0 +1,176 @@
+/*
+ * Copyright (c) 2019 ETH Zurich, Simon Frasch
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ *
+ * 1. Redistributions of source code must retain the above copyright notice,
+ *    this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ * 3. Neither the name of the copyright holder nor the names of its contributors
+ *    may be used to endorse or promote products derived from this software
+ *    without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
+ * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+ * POSSIBILITY OF SUCH DAMAGE.
+ */
+#include <algorithm>
+#include <cassert>
+#include "gpu_util/gpu_fft_api.hpp"
+#include "gpu_util/gpu_kernel_parameter.hpp"
+#include "gpu_util/gpu_runtime.hpp"
+#include "memory/gpu_array_const_view.hpp"
+#include "memory/gpu_array_view.hpp"
+
+namespace spfft {
+
+template <typename T>
+static void symmetrize_plane_kernel(
+    GPUArrayView3D<typename gpu::fft::ComplexType<T>::type> data, const int startIndex,
+    const int numIndices, cl::sycl::nd_item<3>& item_ct) {
+  assert(startIndex + numIndices <= data.dim_mid());
+  int idxMid = item_ct.get_global_id(2);
+  if (idxMid < numIndices) {
+    idxMid += startIndex;
+    for (int idxOuter = item_ct.get_group(1); idxOuter < data.dim_outer();
+         idxOuter += item_ct.get_group_range(1)) {
+      auto value = data(item_ct.get_group(1), idxMid, 0);
+      if (value.x() != T(0) || value.y() != T(0)) {
+        value.y() = -value.y();
+        data(idxOuter, data.dim_mid() - idxMid, 0) = value;
+      }
+    }
+  }
+}
+
+auto symmetrize_plane_gpu(const gpu::StreamType stream,
+                          const GPUArrayView3D<typename gpu::fft::ComplexType<double>::type>& data)
+    -> void {
+  assert(data.size() > 2);
+  {
+    const int startIndex = 1;
+    const int numIndices = data.dim_mid() / 2;
+    const cl::sycl::range<3> threadBlock(1, 1, gpu::BlockSizeSmall);
+    const cl::sycl::range<3> threadGrid(1, std::min(data.dim_outer(), gpu::GridSizeMedium),
+                                    (numIndices + threadBlock[2] - 1) / threadBlock[2]);
+    launch_kernel(symmetrize_plane_kernel<double>, threadGrid, threadBlock, 0, stream, data,
+                  startIndex, numIndices);
+  }
+  {
+    const int startIndex = data.dim_mid() / 2 + 1;
+    const int numIndices = data.dim_mid() - startIndex;
+    const cl::sycl::range<3> threadBlock(1, 1, gpu::BlockSizeSmall);
+    const cl::sycl::range<3> threadGrid(1, std::min(data.dim_outer(), gpu::GridSizeMedium),
+                                    (numIndices + threadBlock[2] - 1) / threadBlock[2]);
+    launch_kernel(symmetrize_plane_kernel<double>, threadGrid, threadBlock, 0, stream, data,
+                  startIndex, numIndices);
+  }
+}
+
+auto symmetrize_plane_gpu(const gpu::StreamType stream,
+                          const GPUArrayView3D<typename gpu::fft::ComplexType<float>::type>& data)
+    -> void {
+  assert(data.size() > 2);
+  {
+    const int startIndex = 1;
+    const int numIndices = data.dim_mid() / 2;
+    const cl::sycl::range<3> threadBlock(1, 1, gpu::BlockSizeSmall);
+    const cl::sycl::range<3> threadGrid(1, std::min(data.dim_outer(), gpu::GridSizeMedium),
+                                    (numIndices + threadBlock[2] - 1) / threadBlock[2]);
+    launch_kernel(symmetrize_plane_kernel<float>, threadGrid, threadBlock, 0, stream, data,
+                  startIndex, numIndices);
+  }
+  {
+    const int startIndex = data.dim_mid() / 2 + 1;
+    const int numIndices = data.dim_mid() - startIndex;
+    const cl::sycl::range<3> threadBlock(1, 1, gpu::BlockSizeSmall);
+    const cl::sycl::range<3> threadGrid(1, std::min(data.dim_outer(), gpu::GridSizeMedium),
+                                    (numIndices + threadBlock[2] - 1) / threadBlock[2]);
+    launch_kernel(symmetrize_plane_kernel<float>, threadGrid, threadBlock, 0, stream, data,
+                  startIndex, numIndices);
+  }
+}
+
+template <typename T>
+static void symmetrize_stick_kernel(
+    GPUArrayView1D<typename gpu::fft::ComplexType<T>::type> data, const int startIndex,
+    const int numIndices, cl::sycl::nd_item<3>& item_ct) {
+  assert(startIndex + numIndices <= data.size());
+  for (int idxInner = item_ct.get_global_id(2) + startIndex;
+       idxInner < numIndices + startIndex;
+       idxInner += item_ct.get_global_range(2)) {
+    auto value = data(idxInner);
+    if (value.x() != T(0) || value.y() != T(0)) {
+      value.y() = -value.y();
+      data(data.size() - idxInner) = value;
+    }
+  }
+}
+
+auto symmetrize_stick_gpu(const gpu::StreamType stream,
+                          const GPUArrayView1D<typename gpu::fft::ComplexType<double>::type>& data)
+    -> void {
+  assert(data.size() > 2);
+  {
+    const int startIndex = 1;
+    const int numIndices = data.size() / 2;
+    const cl::sycl::range<3> threadBlock(1, 1, gpu::BlockSizeSmall);
+    const cl::sycl::range<3> threadGrid(
+        1, 1,
+        std::min(static_cast<int>((numIndices + threadBlock[2] - 1) / threadBlock[2]),
+                 gpu::GridSizeMedium));
+    launch_kernel(symmetrize_stick_kernel<double>, threadGrid, threadBlock, 0, stream, data,
+                  startIndex, numIndices);
+  }
+  {
+    const int startIndex = data.size() / 2 + 1;
+    const int numIndices = data.size() - startIndex;
+    const cl::sycl::range<3> threadBlock(1, 1, gpu::BlockSizeSmall);
+    const cl::sycl::range<3> threadGrid(
+        1, 1,
+        std::min(static_cast<int>((numIndices + threadBlock[2] - 1) / threadBlock[2]),
+                 gpu::GridSizeMedium));
+    launch_kernel(symmetrize_stick_kernel<double>, threadGrid, threadBlock, 0, stream, data,
+                  startIndex, numIndices);
+  }
+}
+
+auto symmetrize_stick_gpu(const gpu::StreamType stream,
+                          const GPUArrayView1D<typename gpu::fft::ComplexType<float>::type>& data)
+    -> void {
+  assert(data.size() > 2);
+  {
+    const int startIndex = 1;
+    const int numIndices = data.size() / 2;
+    const cl::sycl::range<3> threadBlock(1, 1, gpu::BlockSizeSmall);
+    const cl::sycl::range<3> threadGrid(1, 1,
+        std::min(static_cast<int>((numIndices + threadBlock[2] - 1) / threadBlock[2]),
+                 gpu::GridSizeMedium));
+    launch_kernel(symmetrize_stick_kernel<float>, threadGrid, threadBlock, 0, stream, data,
+                  startIndex, numIndices);
+  }
+  {
+    const int startIndex = data.size() / 2 + 1;
+    const int numIndices = data.size() - startIndex;
+    const cl::sycl::range<3> threadBlock(1, 1, gpu::BlockSizeSmall);
+    const cl::sycl::range<3> threadGrid(
+        1, 1,
+        std::min(static_cast<int>((numIndices + threadBlock[2] - 1) / threadBlock[2]),
+                 gpu::GridSizeMedium));
+    launch_kernel(symmetrize_stick_kernel<float>, threadGrid, threadBlock, 0, stream, data,
+                  startIndex, numIndices);
+  }
+}
+
+}  // namespace spfft
