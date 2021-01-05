@@ -43,7 +43,7 @@
 #include "mpi_util/mpi_communicator_handle.hpp"
 #endif
 
-#if defined(SPFFT_CUDA) || defined(SPFFT_ROCM)
+#if defined(SPFFT_CUDA) || defined(SPFFT_ROCM) || defined(SPFFT_SYCL)
 #include "gpu_util/gpu_fft_api.hpp"
 #include "memory/gpu_array.hpp"
 #endif
@@ -99,7 +99,7 @@ public:
 
   inline auto local() -> bool { return isLocal_; }
 
-#if defined(SPFFT_CUDA) || defined(SPFFT_ROCM)
+#if defined(SPFFT_CUDA) || defined(SPFFT_ROCM) || defined(SPFFT_SYCL)
   inline auto array_gpu_1() -> GPUArray<typename gpu::fft::ComplexType<ValueType>::type>& {
     return arrayGPU1_;
   }
@@ -107,9 +107,15 @@ public:
   inline auto array_gpu_2() -> GPUArray<typename gpu::fft::ComplexType<ValueType>::type>& {
     return arrayGPU2_;
   }
+#endif
 
+#if defined(SPFFT_CUDA) || defined(SPFFT_ROCM)
   inline auto fft_work_buffer() -> const std::shared_ptr<GPUArray<char>>& {
     assert(fftWorkBuffer_);
+    return fftWorkBuffer_;
+  }
+#elif defined(SPFFT_SYCL)
+  inline auto fft_work_buffer() -> const std::shared_ptr<GPUArray<char>>& {
     return fftWorkBuffer_;
   }
 #endif
@@ -129,10 +135,10 @@ private:
   HostArray<ComplexType> arrayHost1_;
   HostArray<ComplexType> arrayHost2_;
 
-#if defined(SPFFT_CUDA) || defined(SPFFT_ROCM)
+#if defined(SPFFT_CUDA) || defined(SPFFT_ROCM) || defined(SPFFT_SYCL)
   GPUArray<typename gpu::fft::ComplexType<ValueType>::type> arrayGPU1_;
   GPUArray<typename gpu::fft::ComplexType<ValueType>::type> arrayGPU2_;
-  std::shared_ptr<GPUArray<char>> fftWorkBuffer_;
+  std::shared_ptr<GPUArray<char>> fftWorkBuffer_(nullptr);
 #endif
 
 #ifdef SPFFT_MPI

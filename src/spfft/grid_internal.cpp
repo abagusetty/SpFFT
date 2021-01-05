@@ -37,7 +37,7 @@
 #include "mpi_util/mpi_match_elementary_type.hpp"
 #endif
 
-#if defined(SPFFT_CUDA) || defined(SPFFT_ROCM)
+#if defined(SPFFT_CUDA) || defined(SPFFT_ROCM) || defined(SPFFT_SYCL)
 #include "gpu_util/gpu_device_guard.hpp"
 #include "gpu_util/gpu_runtime_api.hpp"
 #endif
@@ -77,7 +77,7 @@ GridInternal<T>::GridInternal(int maxDimX, int maxDimY, int maxDimZ, int maxNumL
     arrayHost2_ = HostArray<ComplexType>(static_cast<SizeType>(maxDimX * maxDimY * maxDimZ));
   }
   if (executionUnit & SpfftProcessingUnitType::SPFFT_PU_GPU) {
-#if (defined(SPFFT_CUDA) || defined(SPFFT_ROCM))
+#if (defined(SPFFT_CUDA) || defined(SPFFT_ROCM) || defined(SPFFT_SYCL))
     // store device id
     gpu::check_status(gpu::get_device(&deviceId_));
 
@@ -92,12 +92,15 @@ GridInternal<T>::GridInternal(int maxDimX, int maxDimY, int maxDimZ, int maxNumL
         static_cast<SizeType>(maxNumLocalZSticks * maxDimZ));
     arrayGPU2_ = GPUArray<typename gpu::fft::ComplexType<ValueType>::type>(
         static_cast<SizeType>(maxDimX * maxDimY * maxDimZ));
-
-    // each transform will resize the work buffer as needed
-    fftWorkBuffer_.reset(new GPUArray<char>());
-
 #else
     throw GPUSupportError();
+#endif
+
+    // each transform will resize the work buffer as needed
+#if (defined(SPFFT_CUDA) || defined(SPFFT_ROCM))
+    fftWorkBuffer_.reset(new GPUArray<char>());
+#elif defined(SPFFT_SYCL)
+    fftWorkBuffer_.reset();
 #endif
   }
 }
@@ -209,7 +212,7 @@ GridInternal<T>::GridInternal(int maxDimX, int maxDimY, int maxDimZ, int maxNumL
 
   // GPU
   if (executionUnit & SpfftProcessingUnitType::SPFFT_PU_GPU) {
-#if (defined(SPFFT_CUDA) || defined(SPFFT_ROCM))
+#if (defined(SPFFT_CUDA) || defined(SPFFT_ROCM) || defined(SPFFT_SYCL))
     // store device id
     gpu::check_status(gpu::get_device(&deviceId_));
 
@@ -219,11 +222,15 @@ GridInternal<T>::GridInternal(int maxDimX, int maxDimY, int maxDimZ, int maxNumL
         static_cast<SizeType>(requiredSize));
     arrayGPU2_ = GPUArray<typename gpu::fft::ComplexType<ValueType>::type>(
         static_cast<SizeType>(requiredSize));
-
-    // each transform will resize the work buffer as needed
-    fftWorkBuffer_.reset(new GPUArray<char>());
 #else
     throw GPUSupportError();
+#endif
+
+    // each transform will resize the work buffer as needed
+#if (defined(SPFFT_CUDA) || defined(SPFFT_ROCM))
+    fftWorkBuffer_.reset(new GPUArray<char>());
+#elif defined(SPFFT_SYCL)
+    fftWorkBuffer_.reset();
 #endif
   }
 }
@@ -246,7 +253,7 @@ GridInternal<T>::GridInternal(const GridInternal<T>& grid)
   if (!grid.isLocal_) comm_ = MPICommunicatorHandle(grid.comm_.get());
   exchangeType_ = grid.exchangeType_;
 #endif
-#if defined(SPFFT_CUDA) || defined(SPFFT_ROCM)
+#if defined(SPFFT_CUDA) || defined(SPFFT_ROCM) || defined(SPFFT_SYCL)
   if (grid.executionUnit_ & SPFFT_PU_GPU) {
     GPUDeviceGuard(grid.device_id());
 
@@ -256,7 +263,16 @@ GridInternal<T>::GridInternal(const GridInternal<T>& grid)
     if (grid.arrayGPU2_.size() > 0)
       arrayGPU2_ =
           GPUArray<typename gpu::fft::ComplexType<ValueType>::type>(grid.arrayGPU2_.size());
+  }
+#endif
+
+#if defined(SPFFT_CUDA) || defined(SPFFT_ROCM)
+  if (grid.executionUnit_ & SPFFT_PU_GPU) {
     if (grid.fftWorkBuffer_) fftWorkBuffer_.reset(new GPUArray<char>(grid.fftWorkBuffer_->size()));
+  }
+#elif defined(SPFFT_SYCL)
+  if (grid.executionUnit_ & SPFFT_PU_GPU) {
+    if (grid.fftWorkBuffer_) fftWorkBuffer_.reset();
   }
 #endif
 }
